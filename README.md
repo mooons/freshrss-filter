@@ -170,6 +170,10 @@ cargo run
 ```bash
 cargo run -- --once
 ```
+- One-off run with Docker Compose:
+```bash
+docker compose run --rm -e FRF__DRY_RUN=false freshrss-filter /usr/local/bin/freshrss-filter --config /app/config.toml --once
+```
 - Dry-run mode:
 ```bash
 cargo run -- --dry-run
