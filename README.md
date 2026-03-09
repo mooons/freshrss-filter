@@ -133,7 +133,7 @@ Copy `config.example.toml` to `config.toml` and adjust:
   - `base_url`: your FreshRSS URL
   - `fever_api_key`: Fever API key from FreshRSS user settings (generated as: `api_key=$(echo -n "username:freshrss" | md5sum | cut -d' ' -f1)`)
   - `delete_mode`: `mark_read` or `label`
-  - `greader_username`/`greader_password`: required for `label` mode
+  - GReader auth for `label` mode: either `greader_username` + `greader_password`, or `greader_googlelogin_auth` token
   - `spam_label`: label name, default `Ads`
 - `[scheduler]`
   - `cron`: default every 10 minutes (`0 */10 * * * *`)
@@ -152,7 +152,7 @@ Copy `config.example.toml` to `config.toml` and adjust:
   - `base_url`: 您的 FreshRSS URL
   - `fever_api_key`: 来自 FreshRSS 用户设置的 Fever API 密钥（生成方法：`api_key=$(echo -n "用户名:freshrss" | md5sum | cut -d' ' -f1)`）
   - `delete_mode`: 删除模式：`mark_read` 或 `label`
-  - `greader_username`/`greader_password`: `label` 模式所需
+  - `label` 模式的 GReader 鉴权：可使用 `greader_username` + `greader_password`，或 `greader_googlelogin_auth` token
   - `spam_label`: 标签名称，默认为 `Ads`
 - `[scheduler]`
   - `cron`: 默认每 10 分钟运行一次
@@ -375,7 +375,7 @@ docker-compose logs -f
 ## Actions
 
 - `mark_read`: marks classified ads as read via Fever API
-- `label`: adds `spam_label` to the item using GReader `/reader/api/0/edit-tag` endpoint, then marks read
+- `label`: adds `spam_label` to the item using GReader `/reader/api/0/edit-tag` endpoint and keeps unread status
 
 ## 操作说明
 
@@ -403,4 +403,3 @@ docker-compose logs -f
 
 - 更强大的 FreshRSS API 集成（例如通过 API 移动到专用类别）
 - 分类阈值和数据库行为的单元测试
-

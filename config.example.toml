@@ -11,7 +11,7 @@ api_key = "sk-..."
 # Confidence threshold for ad decision (0.0-1.0)
 threshold = 0.6
 # System prompt used by the classifier
-system_prompt = "You are a strict classifier. Decide if an RSS item is an advertisement or sponsored content. Reply JSON: {\"is_ad\": boolean, \"confidence\": 0..1, \"reason\": string}."
+system_prompt = "You are a strict classifier. Decide if an RSS item is an advertisement or sponsored content. Also, decide if an RSS item is worth my time: I am interested in tech or hot topics. Reply JSON: [{\"is_ad\": boolean, \"confidence\": 0..1, \"reason\": string}, {\"is_worth\": boolean, \"confidence\": 0..1, \"reason\": string}]."
 
 [freshrss]
 # FreshRSS base URL (with or without trailing slash)
@@ -23,12 +23,16 @@ user_agent = "freshrss-filter/0.1"
 
 # Action when an item is classified as ad:
 # - "mark_read" (default): mark as read using Fever API
-# - "label": add GReader label (spam_label) and mark as read
+# - "label": add GReader label (spam_label) and keep unread status
 delete_mode = "mark_read"
 
 # Only required when delete_mode = "label"
 greader_username = "your_username"
 greader_password = "your_password"
+# Alternative auth for FreshRSS GoogleReader token mode:
+# greader_googlelogin_auth = "GoogleLogin auth=user/xxxxxxxxxxxxxxxx"
+# or just token part:
+# greader_googlelogin_auth = "user/xxxxxxxxxxxxxxxx"
 spam_label = "Ads"
 
 [scheduler]
@@ -41,4 +45,3 @@ path = "./data/freshrss-filter.db"
 
 # Top-level override to prevent write actions
 dry_run = false
-
