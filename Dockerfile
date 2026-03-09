@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # 构建阶段
 FROM rust:1.90-alpine3.20 AS builder
 
@@ -10,15 +12,21 @@ RUN apk add --no-cache \
 # 设置工作目录
 WORKDIR /app
 
-# 复制Cargo文件
+# 复制 Cargo 元数据，先构建依赖缓存层
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src && printf "fn main() {}\n" > src/main.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --locked
+RUN rm -rf src
 
-# 复制源代码
+# 复制源代码并进行最终构建
 COPY src ./src
 COPY config.example.toml ./
-
-# 构建应用
-RUN cargo build --release
+RUN find src -type f -name '*.rs' -exec touch {} +
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --locked
 
 # 运行阶段
 FROM alpine:3.20
