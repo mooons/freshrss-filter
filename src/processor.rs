@@ -117,6 +117,15 @@ impl Processor {
                                         info!("{} {}", "[+]".green(), truncate(&title, 60),);
                                     });
                                 }
+                                ProcessAction::WouldAct => {
+                                    main_pb.suspend(|| {
+                                        info!(
+                                            "{} {}",
+                                            "[DRY-RUN FILTER]".yellow(),
+                                            truncate(&title, 60),
+                                        );
+                                    });
+                                }
                                 ProcessAction::MarkedRead | ProcessAction::Labeled => {
                                     main_pb.suspend(|| {
                                         info!("{} {}", "[-]".red(), truncate(&title, 60),);
@@ -206,27 +215,69 @@ impl Processor {
                 return Err(err);
             }
         };
+        let is_unworthy = matches!(res.is_worth, Some(false));
+        let should_filter = res.is_ad || is_unworthy;
+        let (decision_confidence, decision_reason) = if res.is_ad {
+            (res.confidence, res.reason.clone())
+        } else if is_unworthy {
+            (
+                res.worth_confidence.unwrap_or(res.confidence),
+                res.worth_reason.clone().unwrap_or_else(|| res.reason.clone()),
+            )
+        } else {
+            (res.confidence, res.reason.clone())
+        };
+
         self.db
-            .save_review(&item_id, &hash, res.is_ad, res.confidence, &res.reason)
+            .save_review(
+                &item_id,
+                &hash,
+                should_filter,
+                decision_confidence,
+                &decision_reason,
+            )
             .await?;
 
-        if res.is_ad && res.confidence >= self.cfg.openai.threshold {
+        if should_filter && decision_confidence >= self.cfg.openai.threshold {
             if self.cfg.dry_run {
-                warn!(id = item.id, "dry_run_ad_detected");
+                warn!(
+                    id = item.id,
+                    title = %truncate(&item.title, 120),
+                    confidence = decision_confidence,
+                    reason = %decision_reason,
+                    "dry_run_filter_detected"
+                );
                 return Ok(ProcessAction::WouldAct);
             } else {
-                if self.cfg.freshrss.delete_mode == "mark_read" {
-                    self.fr.mark_item_read(item.id).await?;
-                    return Ok(ProcessAction::MarkedRead);
-                } else if self.cfg.freshrss.delete_mode == "label" {
-                    if let Some(gr) = &self.gr {
-                        gr.add_label(item.id, &self.cfg.freshrss.spam_label).await?;
+                match self.cfg.freshrss.delete_mode.as_str() {
+                    "mark_read" => {
                         self.fr.mark_item_read(item.id).await?;
-                        return Ok(ProcessAction::Labeled);
+                        return Ok(ProcessAction::MarkedRead);
                     }
-                } else {
-                    self.fr.delete_item_soft(item.id).await?;
-                    return Ok(ProcessAction::Deleted);
+                    "label" => {
+                        if let Some(gr) = &self.gr {
+                            gr.add_label(item.id, &self.cfg.freshrss.spam_label).await?;
+                            return Ok(ProcessAction::Labeled);
+                        }
+                        warn!(
+                            mode = %self.cfg.freshrss.delete_mode,
+                            "label_mode_missing_greader_credentials_fallback_mark_read"
+                        );
+                        self.fr.mark_item_read(item.id).await?;
+                        return Ok(ProcessAction::MarkedRead);
+                    }
+                    "delete" => {
+                        self.fr.delete_item_soft(item.id).await?;
+                        return Ok(ProcessAction::Deleted);
+                    }
+                    _ => {
+                        warn!(
+                            mode = %self.cfg.freshrss.delete_mode,
+                            "unknown_delete_mode_fallback_mark_read"
+                        );
+                        self.fr.mark_item_read(item.id).await?;
+                        return Ok(ProcessAction::MarkedRead);
+                    }
                 }
             }
         }
