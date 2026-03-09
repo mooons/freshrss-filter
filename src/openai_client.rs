@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument};
 
 use std::fmt;
 
@@ -38,6 +38,23 @@ pub struct ClassifierResponse {
     pub is_ad: bool,
     pub confidence: f32,
     pub reason: String,
+    pub is_worth: Option<bool>,
+    pub worth_confidence: Option<f32>,
+    pub worth_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct AdSignal {
+    pub is_ad: bool,
+    pub confidence: f32,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct WorthSignal {
+    pub is_worth: bool,
+    pub confidence: f32,
+    pub reason: String,
 }
 
 impl OpenAiClient {
@@ -51,7 +68,8 @@ impl OpenAiClient {
         #[derive(Serialize)]
         struct ReqBody<'a> {
             model: &'a str,
-            response_format: RespFmt,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            response_format: Option<RespFmt>,
             messages: Vec<Message<'a>>,
             #[serde(skip_serializing_if = "Option::is_none")]
             temperature: Option<f32>,
@@ -68,11 +86,13 @@ impl OpenAiClient {
             content: &'a str,
         }
 
+        let use_json_object_response_format = !self.cfg.api_base.contains("anthropic.com");
+
         let body = ReqBody {
             model: &self.cfg.model,
-            response_format: RespFmt {
+            response_format: use_json_object_response_format.then_some(RespFmt {
                 r#type: "json_object",
-            },
+            }),
             messages: vec![
                 Message {
                     role: "system",
@@ -120,44 +140,119 @@ impl OpenAiClient {
 }
 
 fn parse_classifier_response(content: &str, raw: &str) -> Result<ClassifierResponse> {
-    match serde_json::from_str::<ClassifierResponse>(content) {
-        Ok(parsed) => Ok(parsed),
+    match serde_json::from_str::<AdSignal>(content) {
+        Ok(parsed) => Ok(ClassifierResponse {
+            is_ad: parsed.is_ad,
+            confidence: parsed.confidence,
+            reason: parsed.reason,
+            is_worth: None,
+            worth_confidence: None,
+            worth_reason: None,
+        }),
         Err(primary_err) => {
-            let responses: Vec<ClassifierResponse> =
-                serde_json::from_str(content).map_err(|secondary_err| {
-                    anyhow!(
-                        "parse_classifier_response_failed: {} (array_parse_error: {}) raw={}",
-                        primary_err,
-                        secondary_err,
-                        raw
-                    )
-                })?;
+            let v: Value = serde_json::from_str(content).map_err(|secondary_err| {
+                anyhow!(
+                    "parse_classifier_response_failed: {} (array_parse_error: {}) raw={}",
+                    primary_err,
+                    secondary_err,
+                    raw
+                )
+            })?;
 
-            if responses.is_empty() {
+            if let Some(obj) = v.as_object() {
+                if let Ok(worth) = serde_json::from_value::<WorthSignal>(Value::Object(obj.clone())) {
+                    return Ok(ClassifierResponse {
+                        is_ad: false,
+                        confidence: worth.confidence,
+                        reason: worth.reason.clone(),
+                        is_worth: Some(worth.is_worth),
+                        worth_confidence: Some(worth.confidence),
+                        worth_reason: Some(worth.reason),
+                    });
+                }
+                return Err(anyhow!(
+                    "parse_classifier_response_failed: expected ad/worth object or array raw={}",
+                    raw
+                ));
+            }
+
+            let arr = v.as_array().ok_or_else(|| {
+                anyhow!(
+                    "parse_classifier_response_failed: expected ad/worth object or array raw={}",
+                    raw
+                )
+            })?;
+
+            let ad_signals: Vec<AdSignal> = arr
+                .iter()
+                .filter_map(|item| serde_json::from_value::<AdSignal>(item.clone()).ok())
+                .collect();
+            let worth_signals: Vec<WorthSignal> = arr
+                .iter()
+                .filter_map(|item| serde_json::from_value::<WorthSignal>(item.clone()).ok())
+                .collect();
+
+            if ad_signals.is_empty() && worth_signals.is_empty() {
+                return Err(anyhow!(
+                    "parse_classifier_response_failed: no valid ad/worth objects in array raw={}",
+                    raw
+                ));
+            }
+
+            debug!(
+                error = %primary_err,
+                total_count = arr.len(),
+                ad_count = ad_signals.len(),
+                worth_count = worth_signals.len(),
+                "classifier_response_array_detected"
+            );
+
+            let best_ad_true = ad_signals
+                .iter()
+                .filter(|r| r.is_ad)
+                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+                .cloned();
+            let best_ad_any = ad_signals
+                .iter()
+                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+                .cloned();
+            let best_worth_false = worth_signals
+                .iter()
+                .filter(|r| !r.is_worth)
+                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+                .cloned();
+            let best_worth_any = worth_signals
+                .iter()
+                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+                .cloned();
+
+            let ad_selected = best_ad_true.or(best_ad_any.clone());
+            let worth_selected = best_worth_false.or(best_worth_any);
+
+            if ad_selected.is_none() && worth_selected.is_none() {
                 return Err(anyhow!(
                     "parse_classifier_response_failed: empty array raw={}",
                     raw
                 ));
             }
 
-            warn!(
-                error = %primary_err,
-                count = responses.len(),
-                "classifier_response_array_detected"
-            );
-
-            if let Some(best_ad) = responses
-                .iter()
-                .filter(|r| r.is_ad)
-                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-            {
-                return Ok(best_ad.clone());
-            }
-
-            responses
-                .into_iter()
-                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-                .ok_or_else(|| anyhow!("parse_classifier_response_failed: empty array raw={}", raw))
+            Ok(ClassifierResponse {
+                is_ad: ad_selected.as_ref().map(|a| a.is_ad).unwrap_or(false),
+                confidence: ad_selected.as_ref().map(|a| a.confidence).unwrap_or_else(|| {
+                    worth_selected
+                        .as_ref()
+                        .map(|w| w.confidence)
+                        .unwrap_or(0.0)
+                }),
+                reason: ad_selected
+                    .as_ref()
+                    .map(|a| a.reason.clone())
+                    .or_else(|| worth_selected.as_ref().map(|w| w.reason.clone()))
+                    .unwrap_or_else(|| "no_reason".to_string()),
+                is_worth: worth_selected.as_ref().map(|w| w.is_worth),
+                worth_confidence: worth_selected.as_ref().map(|w| w.confidence),
+                worth_reason: worth_selected.as_ref().map(|w| w.reason.clone()),
+            })
         }
     }
 }
