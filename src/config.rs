@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -43,6 +43,9 @@ pub struct FreshRssConfig {
     pub greader_username: Option<String>,
     #[serde(default)]
     pub greader_password: Option<String>,
+    /// Optional GoogleLogin token for GReader auth (used as Authorization header)
+    #[serde(default)]
+    pub greader_googlelogin_auth: Option<String>,
     /// Label name to tag ads (auto-created by GReader API)
     #[serde(default = "default_spam_label")]
     pub spam_label: String,
@@ -113,6 +116,19 @@ pub async fn load(custom_path: Option<&Path>) -> Result<Config> {
     }
     if cfg.freshrss.user_agent.is_empty() {
         cfg.freshrss.user_agent = default_user_agent();
+    }
+    cfg.freshrss.delete_mode = cfg.freshrss.delete_mode.trim().to_lowercase();
+    if cfg.freshrss.delete_mode.is_empty() {
+        cfg.freshrss.delete_mode = default_delete_mode();
+    }
+    match cfg.freshrss.delete_mode.as_str() {
+        "mark_read" | "label" | "delete" => {}
+        _ => {
+            return Err(anyhow!(
+                "invalid freshrss.delete_mode: {} (allowed: mark_read | label | delete)",
+                cfg.freshrss.delete_mode
+            ));
+        }
     }
     if cfg.scheduler.cron.is_empty() {
         cfg.scheduler.cron = default_cron();
