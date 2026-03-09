@@ -45,11 +45,8 @@ async fn main() -> Result<()> {
     let db = db::Database::new(&cfg.database.path).await?;
 
     let fr_client = freshrss::build_client(&cfg.freshrss)?;
-    let gr_client = if let (Some(u), Some(p)) = (
-        &cfg.freshrss.greader_username,
-        &cfg.freshrss.greader_password,
-    ) {
-        Some(greader::build_client(&cfg.freshrss, u.clone(), p.clone())?)
+    let gr_client = if greader::has_auth_config(&cfg.freshrss) {
+        Some(greader::build_client(&cfg.freshrss)?)
     } else {
         None
     };
